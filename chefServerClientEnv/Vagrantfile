@@ -8,20 +8,61 @@ echo root:password | chpasswd
 cat << HOSTS > /etc/hosts
 127.0.0.1 localhost localhost.localdomain localhost4 localhost4.localdomain4
 ::1 localhost localhost.localdomain localhost6 localhost6.localdomain6
-192.168.100.10 chefsrv
-192.168.100.20 chefwork
+192.168.100.10 chefsrv.test
+192.168.100.20 chefwrk.test
+192.168.100.30 chefnode.test
 HOSTS
 EOF
 
+$NODE_SCRIPT = <<EOF
+echo "Preparing node..."
+
+# ensure the time is up to date
+apt-get update
+apt-get -y install ntp
+service ntp stop
+ntpdate -s time.nist.gov
+service ntp start
+
+EOF
+
+# uninstalls residual chef on box as we bootstrap the node from the workstation
+$NODE_SCRIPT_UNINSTALL_CHEF = <<EOF
+dpkg -P chef
+rm -rf /opt/chef
+rm -rf /etc/chef
+for P in /usr/bin/chef-*; do [ -e "$P" ] && sudo rm -f "$P"; done
+sudo rm -f /usr/bin/knife /usr/bin/ohai /usr/bin/chef
+sudo rm -rf /var/chef
+
+EOF
 
 $CHEF_SERVER_INSTALL = <<EOF
 #!/bin/sh
-curl -O https://raw.githubusercontent.com/rcbops/support-tools/master/chef-install/install-chef-server.sh
-chmod +x install-chef-server.sh
-export CHEF_URL="https://chefsrv:443"
-./install-chef-server.sh
+chmod +x /tmp/installChefServer.sh
+/tmp/installChefServer.sh
 EOF
 
+$CHEF_WORKSTATION_INSTALL = <<EOF
+#!/bin/sh
+chmod +x /tmp/installChefWorkstation.sh
+/tmp/installChefWorkstation.sh
+EOF
+
+$CHEF_WORKSTATION_CONFIGURE_NODE = <<EOF
+cd ~vagrant/learn-chef/.chef
+knife bootstrap chefnode.test --ssh-port 22 --ssh-user vagrant --sudo --identity-file /vagrant/.vagrant/machines/chefnode/virtualbox/private_key --node-name chefnode.test --run-list 'recipe[learn_chef_apache2]' --yes
+# confirm node has been added
+knife node list| grep chefnode > /dev/null 2>&1 
+if [ "$?" != "0" ]; then
+  echo "ERROR: Node was not added to chef environment"
+  exit 1
+fi
+EOF
+
+def set_hostname(server)
+  server.vm.provision 'shell', inline: "hostname #{server.vm.hostname}"
+end
 
 # All Vagrant configuration is done below. The "2" in Vagrant.configure
 # configures the configuration version (we support older styles for
@@ -36,24 +77,53 @@ Vagrant.configure(2) do |config|
   # boxes at https://atlas.hashicorp.com/search.
   config.vm.box = "ubuntu/trusty64"
   config.vm.define "chefsrv" do |chefsrv_config|
-    chefsrv_config.vm.hostname = "chefsrv"
-
+    chefsrv_config.vm.hostname = "chefsrv.test"
+	set_hostname(chefsrv_config)
     chefsrv_config.vm.provision "shell", inline: $HOSTFILE
-
+    chefsrv_config.vm.provision :shell, inline: $NODE_SCRIPT
     # eth1
     chefsrv_config.vm.network "private_network", ip: "192.168.100.10"
     # eth2
     chefsrv_config.vm.network "private_network", ip: "192.168.200.10"
 
     chefsrv_config.vm.provider "virtualbox" do |v|
-        v.customize ["modifyvm", :id, "--memory", "1024"]
+        v.customize ["modifyvm", :id, "--memory", "2048"]
         v.customize ["modifyvm", :id, "--cpus", "1"]
     end
 	
 	chefsrv_config.vm.provision "shell", inline: "sudo apt-get install git -y"
+	chefsrv_config.vm.provision "file", source: "./installChefServer.sh", destination: "/tmp/installChefServer.sh"
 	chefsrv_config.vm.provision :"shell", inline: $CHEF_SERVER_INSTALL
   end
- 
+
+  config.vm.define 'chefnode' do |n|
+    n.vm.hostname = 'chefnode'
+    n.vm.network 'private_network', ip: '192.168.100.30'
+    n.vm.provision :shell, inline: $NODE_SCRIPT
+    set_hostname(n)
+	n.vm.provision "shell", inline: $HOSTFILE
+	n.vm.provision "shell", inline: $NODE_SCRIPT_UNINSTALL_CHEF
+    n.vm.provider "virtualbox" do |v|
+        v.customize ["modifyvm", :id, "--memory", "512"]
+        v.customize ["modifyvm", :id, "--cpus", "1"]
+    end
+  end  
+  
+  config.vm.define 'chefwrk' do |w|
+    w.vm.hostname = 'chefwrk'
+    w.vm.network 'private_network', ip: '192.168.100.20'
+    set_hostname(w)
+	w.vm.provision "shell", inline: $HOSTFILE
+	w.vm.provision :shell, inline: $NODE_SCRIPT
+	w.vm.provision "file", source: "./installChefWorkstation.sh", destination: "/tmp/installChefWorkstation.sh"
+	w.vm.provision :"shell", inline: $CHEF_WORKSTATION_INSTALL
+	w.vm.provision :"shell", inline: $CHEF_WORKSTATION_CONFIGURE_NODE
+	
+    w.vm.provider "virtualbox" do |v|
+        v.customize ["modifyvm", :id, "--memory", "1024"]
+        v.customize ["modifyvm", :id, "--cpus", "1"]
+    end
+  end  
 
   # Disable automatic box update checking. If you disable this, then
   # boxes will only be checked for updates when the user runs
