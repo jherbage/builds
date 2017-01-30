@@ -14,6 +14,16 @@ cat << HOSTS > /etc/hosts
 HOSTS
 EOF
 
+$SUDO = <<EOF
+#!/bin/sh
+echo root:password | chpasswd
+
+cat << SUDO >> /etc/sudoers
+vagrant ALL=(ALL) ALL
+%admin ALL=(ALL) :ALL
+SUDO
+EOF
+
 $NODE_SCRIPT = <<EOF
 echo "Preparing node..."
 
@@ -51,7 +61,7 @@ EOF
 
 $CHEF_WORKSTATION_CONFIGURE_NODE = <<EOF
 cd ~vagrant/learn-chef/.chef
-knife bootstrap chefnode.test --ssh-port 22 --ssh-user vagrant --sudo --identity-file /vagrant/.vagrant/machines/chefnode/virtualbox/private_key --node-name chefnode.test --run-list 'recipe[learn_chef_apache2]' --yes
+knife bootstrap chefnode.test --ssh-port 22 --ssh-user vagrant --sudo --identity-file /vagrant/.vagrant/machines/chefnode/virtualbox/private_key --node-name chefnode.test --run-list 'recipe[HelloWorldNodeJS]' --yes -j '{"private-ip": "192.168.100.30"}'
 # confirm node has been added
 knife node list| grep chefnode > /dev/null 2>&1 
 if [ "$?" != "0" ]; then
