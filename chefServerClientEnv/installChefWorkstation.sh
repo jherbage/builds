@@ -80,6 +80,7 @@ if [ ! -d /home/vagrant/learn-chef/.chef/cookbooks ]; then
   git config --global user.name "jherbage"
   git clone https://github.com/jherbage/chef-cookbooks
   
+  cd chef-cookbooks
   for f in *; do
     if [ -d ${f} ]; then
         # Will not run if no directories are available
@@ -87,5 +88,6 @@ if [ ! -d /home/vagrant/learn-chef/.chef/cookbooks ]; then
     fi
   done
 
+chown -R vagrant:vagrant /home/vagrant
 fi
 
