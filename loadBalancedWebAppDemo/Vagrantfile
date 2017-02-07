@@ -1,15 +1,36 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
+# read the env
+require 'json'
+file = File.read('env.json')
+data = JSON.parse(file)
+numberOfNodes=data["numberOfNodes"].to_i
+
+
 $HOSTFILE = <<EOF
-#!/bin/sh
-cat << HOSTS > /etc/hosts
-127.0.0.1 localhost localhost.localdomain localhost4 localhost4.localdomain4
-::1 localhost localhost.localdomain localhost6 localhost6.localdomain6
-192.168.100.10 lb lb.test
-192.168.100.20 node1 node1.test
-192.168.100.30 node2 node2.test
-HOSTS
+# Create python script
+cat << PYTHON > createhostfile.py
+import json
+with open('/vagrant/env.json') as data_file:    
+  data = json.load(data_file)
+numberOfNodes=int(data["numberOfNodes"]) | 2 
+if numberOfNodes > 10:
+  numberOfNodes=10
+  print "Maximum number of nodes exceeded - setting to 10"
+print "Number of nodes: "+str(numberOfNodes)
+subnet=data["subnet"]
+f = open('/etc/hosts', 'w')
+f.write('127.0.0.1 localhost localhost.localdomain localhost4 localhost4.localdomain4\n')
+f.write('::1 localhost localhost.localdomain localhost6 localhost6.localdomain6\n')
+for x in range(1,numberOfNodes+1):
+  f.write(subnet+'.'+str(10+x)+' node'+str(x)+' node'+str(x)+'.test\n')
+f.close()
+PYTHON
+python createhostfile.py
+rc=$?
+rm -f createhostfile.py
+exit $rc
 EOF
 
 $NODE_SCRIPT = <<EOF
@@ -52,23 +73,57 @@ cd /vagrant
 git clone https://github.com/jherbage/chef-cookbooks
 
 # config for the web app and nginx in here
-cat << JSON > webapp.config.json
-{"private-ip": "`hostname -I | cut -d" " -f2`", 
- "hosts": [ "192.168.100.10", "192.168.100.20","192.168.100.30"],
- "listening_port": "8080",
- "webapp_port": "8002"
-}
-JSON
+privateIp=`hostname -I | cut -d" " -f2`
+sed -i "s/^{/{\"private-ip\": \"${privateIp}\",/"  node.json
+
 
 #install web app 
-chef-solo --override-runlist "recipe[HelloWorldNodeJS]" -j webapp.config.json
+chef-solo --override-runlist "recipe[HelloWorldNodeJS]" -j node.json
 
 EOF
 
-
+# Installs my nginx recipe which includes a template to load balance across the nodes defined in env.json	
 $LB_SCRIPT = <<EOF
 # Install nginx
-chef-solo --override-runlist "recipe[nginx]" -j /vagrant/webapp.config.json	
+chef-solo --override-runlist "recipe[nginx]" -j /vagrant/node.json	
+EOF
+
+# Test that all of the load balanced nodes are responding - we will attempt 10 x connections (in case not round robin)
+$LB_TEST_SCRIPT = <<EOF
+# Create python script
+cat << PYTHON > testwebapp.py
+import json
+import requests
+import re
+with open('/vagrant/env.json') as data_file:    
+  data = json.load(data_file)
+numberOfNodes=int(data["numberOfNodes"])
+numberOfAttempts=numberOfNodes * 10
+success=False
+p = re.compile('Hello World from node(\\d+)')
+seenHosts={}
+for x in range(0,numberOfAttempts-1):
+  #print "attempt "+str(x)
+  try:
+    r = requests.get("http://"+data["hosts"][0]+":"+data["listening_port"])
+    #print "response: "+r.content
+    matches=p.search(r.content)
+	
+  except:
+    pass
+  if matches is not None and matches.groups > 1:
+    print "seen node"+matches.group(1)
+    seenHosts[matches.group(1)] = "OK"  
+  if len(seenHosts) == numberOfNodes:
+    print "All nodes served by the load balancer"
+    exit(0)
+print "Some nodes were not served by the load balancer: Expected "+str(numberOfNodes)+" nodes but only saw these "+str(len(seenHosts))+" nodes: "+','.join(seenHosts.keys())
+exit(1)
+PYTHON
+python testwebapp.py
+rc=$?
+rm -f testwebapp.py
+exit $rc
 EOF
 
 def set_hostname(server)
@@ -91,33 +146,26 @@ Vagrant.configure(2) do |config|
   config.vm.provision "shell", inline: $HOSTFILE
   config.vm.provision :shell, inline: $NODE_SCRIPT
   # eth1
-  
-  config.vm.define "node1" do |node1|
-    node1.vm.network "private_network", ip: "192.168.100.20"
-	node1.vm.hostname = "node1.test"
-	set_hostname(node1)
-	node1.vm.provider "virtualbox" do |v|
-      v.customize ["modifyvm", :id, "--memory", "512"]
-      v.customize ["modifyvm", :id, "--cpus", "1"]
+  (2..numberOfNodes).each do|n|
+    config.vm.define "node"+n.to_s do |node|
+      node.vm.network "private_network", ip: data["subnet"]+"."+(n+10)
+	  node.vm.hostname = "node"+n.to_s+".test"
+	  set_hostname(node)
+	  node.vm.provider "virtualbox" do |v|
+        v.customize ["modifyvm", :id, "--memory", "512"]
+        v.customize ["modifyvm", :id, "--cpus", "1"]
+      end
     end
   end
 
-  config.vm.define "node2" do |node2|
-    node2.vm.network "private_network", ip: "192.168.100.30"
-	node2.vm.hostname = "node2.test"
-	set_hostname(node2)
-	node2.vm.provider "virtualbox" do |v|
-      v.customize ["modifyvm", :id, "--memory", "512"]
-      v.customize ["modifyvm", :id, "--cpus", "1"]
-    end
-  end
-
-  config.vm.define "lb" do |lb|
-    lb.vm.network "private_network", ip: "192.168.100.10"
-	lb.vm.hostname = "lb.test"
-	set_hostname(lb)
-	lb.vm.provision :shell, inline: $LB_SCRIPT
-	lb.vm.provider "virtualbox" do |v|
+  # load balancer master node  
+  config.vm.define "node1" do |node|
+    node.vm.network "private_network", ip: data["subnet"]+".11"
+	node.vm.hostname = "node1.test"
+	set_hostname(node)
+	node.vm.provision :shell, inline: $LB_SCRIPT
+	node.vm.provision :shell, inline: $LB_TEST_SCRIPT
+	node.vm.provider "virtualbox" do |v|
       v.customize ["modifyvm", :id, "--memory", "512"]
       v.customize ["modifyvm", :id, "--cpus", "1"]
     end
