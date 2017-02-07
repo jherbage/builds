@@ -21,10 +21,10 @@ if numberOfNodes > 10:
 print "Number of nodes: "+str(numberOfNodes)
 subnet=data["subnet"]
 f = open('/etc/hosts', 'w')
-f.write('127.0.0.1 localhost localhost.localdomain localhost4 localhost4.localdomain4\n')
-f.write('::1 localhost localhost.localdomain localhost6 localhost6.localdomain6\n')
+f.write('127.0.0.1 localhost localhost.localdomain localhost4 localhost4.localdomain4\\n')
+f.write('::1 localhost localhost.localdomain localhost6 localhost6.localdomain6\\n')
 for x in range(1,numberOfNodes+1):
-  f.write(subnet+'.'+str(10+x)+' node'+str(x)+' node'+str(x)+'.test\n')
+  f.write(subnet+'.'+str(10+x)+' node'+str(x)+' node'+str(x)+'.test\\n')
 f.close()
 PYTHON
 python createhostfile.py
@@ -74,19 +74,19 @@ git clone https://github.com/jherbage/chef-cookbooks
 
 # config for the web app and nginx in here
 privateIp=`hostname -I | cut -d" " -f2`
-cp -p env.json node.json
-sed -i "s/^{/{\"private-ip\": \"${privateIp}\",/"  node.json
+cp -p env.json /home/vagrant/node.json
+sed -i "s/^{/{\\"private-ip\\": \\"${privateIp}\\",/"  /home/vagrant/node.json
 
 
 #install web app 
-chef-solo --override-runlist "recipe[HelloWorldNodeJS]" -j node.json
+chef-solo --override-runlist "recipe[HelloWorldNodeJS]" -j /home/vagrant/node.json
 
 EOF
 
 # Installs my nginx recipe which includes a template to load balance across the nodes defined in node.json	
 $LB_SCRIPT = <<EOF
 # Install nginx
-chef-solo --override-runlist "recipe[nginx]" -j /vagrant/node.json	
+chef-solo --override-runlist "recipe[nginx]" -j /home/vagrant/node.json	
 EOF
 
 # Test that all of the load balanced nodes are responding - we will attempt 10 x connections (in case not round robin)
@@ -106,7 +106,8 @@ seenHosts={}
 for x in range(0,numberOfAttempts-1):
   #print "attempt "+str(x)
   try:
-    r = requests.get("http://"+data["hosts"][0]+":"+data["listening_port"])
+    #print "trying: "+"http://"+data["subnet"]+".11:"+data["listening_port"]
+    r = requests.get("http://"+data["subnet"]+".11:"+data["listening_port"])
     #print "response: "+r.content
     matches=p.search(r.content)
 	
