@@ -1,6 +1,80 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
+$HOSTFILE = <<EOF
+#!/bin/sh
+cat << HOSTS > /etc/hosts
+127.0.0.1 localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1 localhost localhost.localdomain localhost6 localhost6.localdomain6
+192.168.100.10 lb lb.test
+192.168.100.20 node1 node1.test
+192.168.100.30 node2 node2.test
+HOSTS
+EOF
+
+$NODE_SCRIPT = <<EOF
+echo "Preparing node..."
+
+# ensure the time is up to date
+apt-get update
+apt-get -y install ntp
+service ntp stop
+ntpdate -s time.nist.gov
+service ntp start
+apt-get -y install build-essential ruby-dev git curl build-essential libxml2-dev libxslt-dev libssl-dev autoconf 
+# install chef
+if [ ! -e /opt/chef/bin/chef-solo ] ; then
+  curl -L https://www.opscode.com/chef/install.sh | bash
+fi
+# check chef installed
+chef-solo -v | grep -v grep | grep "Chef:"
+if [ "$?" != 0 ]; then
+  echo "failed to install chef"
+  exit 1
+fi
+
+# /etc/chef isnt generated on install!
+mkdir /etc/chef
+cat << CONTENT > /etc/chef/solo.rb
+cookbook_path [
+               '/vagrant/chef-cookbooks'
+              ]
+CONTENT
+
+# install berkshelf
+if [ ! -e /opt/chef/embedded/bin/berks ] ; then
+    /opt/chef/embedded/bin/gem install berkshelf --no-ri --no-rdoc
+    ln -s /opt/chef/embedded/bin/berks /usr/local/bin/berks
+fi
+
+# get web app cookbook from git
+cd /vagrant
+git clone https://github.com/jherbage/chef-cookbooks
+
+# config for the web app and nginx in here
+cat << JSON > webapp.config.json
+{"private-ip": "`hostname -I | cut -d" " -f2`", 
+ "hosts": [ "192.168.100.10", "192.168.100.20","192.168.100.30"],
+ "listening_port": "8080",
+ "webapp_port": "8002"
+}
+JSON
+
+#install web app 
+chef-solo --override-runlist "recipe[HelloWorldNodeJS]" -j webapp.config.json
+
+EOF
+
+
+$LB_SCRIPT = <<EOF
+# Install nginx
+chef-solo --override-runlist "recipe[nginx]" -j /vagrant/webapp.config.json	
+EOF
+
+def set_hostname(server)
+  server.vm.provision 'shell', inline: "hostname #{server.vm.hostname}"
+end
+
 # All Vagrant configuration is done below. The "2" in Vagrant.configure
 # configures the configuration version (we support older styles for
 # backwards compatibility). Please don't change it unless you know what
@@ -12,8 +86,44 @@ Vagrant.configure(2) do |config|
 
   # Every Vagrant development environment requires a box. You can search for
   # boxes at https://atlas.hashicorp.com/search.
-  config.vm.box = "base"
+  config.vm.box = "puppetlabs/ubuntu-14.04-64-nocm"
 
+  config.vm.provision "shell", inline: $HOSTFILE
+  config.vm.provision :shell, inline: $NODE_SCRIPT
+  # eth1
+  
+  config.vm.define "node1" do |node1|
+    node1.vm.network "private_network", ip: "192.168.100.20"
+	node1.vm.hostname = "node1.test"
+	set_hostname(node1)
+	node1.vm.provider "virtualbox" do |v|
+      v.customize ["modifyvm", :id, "--memory", "512"]
+      v.customize ["modifyvm", :id, "--cpus", "1"]
+    end
+  end
+
+  config.vm.define "node2" do |node2|
+    node2.vm.network "private_network", ip: "192.168.100.30"
+	node2.vm.hostname = "node2.test"
+	set_hostname(node2)
+	node2.vm.provider "virtualbox" do |v|
+      v.customize ["modifyvm", :id, "--memory", "512"]
+      v.customize ["modifyvm", :id, "--cpus", "1"]
+    end
+  end
+
+  config.vm.define "lb" do |lb|
+    lb.vm.network "private_network", ip: "192.168.100.10"
+	lb.vm.hostname = "lb.test"
+	set_hostname(lb)
+	lb.vm.provision :shell, inline: $LB_SCRIPT
+	lb.vm.provider "virtualbox" do |v|
+      v.customize ["modifyvm", :id, "--memory", "512"]
+      v.customize ["modifyvm", :id, "--cpus", "1"]
+    end
+
+  end
+  
   # Disable automatic box update checking. If you disable this, then
   # boxes will only be checked for updates when the user runs
   # `vagrant box outdated`. This is not recommended.
