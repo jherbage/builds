@@ -74,6 +74,7 @@ git clone https://github.com/jherbage/chef-cookbooks
 
 # config for the web app and nginx in here
 privateIp=`hostname -I | cut -d" " -f2`
+cp -p env.json node.json
 sed -i "s/^{/{\"private-ip\": \"${privateIp}\",/"  node.json
 
 
@@ -82,7 +83,7 @@ chef-solo --override-runlist "recipe[HelloWorldNodeJS]" -j node.json
 
 EOF
 
-# Installs my nginx recipe which includes a template to load balance across the nodes defined in env.json	
+# Installs my nginx recipe which includes a template to load balance across the nodes defined in node.json	
 $LB_SCRIPT = <<EOF
 # Install nginx
 chef-solo --override-runlist "recipe[nginx]" -j /vagrant/node.json	
