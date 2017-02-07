@@ -149,7 +149,7 @@ Vagrant.configure(2) do |config|
   # eth1
   (2..numberOfNodes).each do|n|
     config.vm.define "node"+n.to_s do |node|
-      node.vm.network "private_network", ip: data["subnet"]+"."+(n+10)
+      node.vm.network "private_network", ip: data["subnet"]+"."+(n+10).to_s
 	  node.vm.hostname = "node"+n.to_s+".test"
 	  set_hostname(node)
 	  node.vm.provider "virtualbox" do |v|
