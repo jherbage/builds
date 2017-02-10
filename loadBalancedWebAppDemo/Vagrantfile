@@ -3,21 +3,54 @@
 
 # read the env
 require 'json'
-file = File.read('env.json')
-data = JSON.parse(file)
+begin
+  file = File.read('env.json')
+  data = JSON.parse(file)
+rescue
+  puts "no env.json provided so will use defaults"
+ensure
+  data = {
+"numberOfNodes" => "2",
+"subnet" => "192.168.10",
+"listening_port" => "8080",
+"webapp_port" => "8002"
+}
+  file = File.write('env.json', data.to_json)
+end
+  
 numberOfNodes=data["numberOfNodes"].to_i
+if numberOfNodes < 1
+  numberOfNodes = 1
+  puts "numberOfNodes set to 1 as value provided < 1"
+elsif numberOfNodes > 10
+  numberOfNodes = 10
+  puts "numberOfNodes set to 10 as value provided > 10"
+end
+data["numberOfNodes"] = numberOfNodes.to_s
 
+# check the listening_port
+if data["listening_port"].to_i > 64000 || data["listening_port"].to_i > 1025
+  data["listening_port"] = "8080"
+end 
+ 
+if data["webapp_port"].to_i > 64000 || data["webapp_port"].to_i > 1025
+  data["webapp_port"] = "8002"
+end
+
+if data["webapp_port"].to_i == data["listening_port"].to_i
+  data["webapp_port"] = ((data["listening_port"]).to_i+1).to_s 
+end
+
+# write the data out again so its available for a runtime execution
+file = File.write('env.runtime.json', data.to_json)
 
 $HOSTFILE = <<EOF
 # Create python script
 cat << PYTHON > createhostfile.py
 import json
-with open('/vagrant/env.json') as data_file:    
+with open('/vagrant/env.runtime.json') as data_file:    
   data = json.load(data_file)
-numberOfNodes=int(data["numberOfNodes"]) | 2 
-if numberOfNodes > 10:
-  numberOfNodes=10
-  print "Maximum number of nodes exceeded - setting to 10"
+numberOfNodes=int(data["numberOfNodes"])
 print "Number of nodes: "+str(numberOfNodes)
 subnet=data["subnet"]
 f = open('/etc/hosts', 'w')
@@ -74,7 +107,7 @@ git clone https://github.com/jherbage/chef-cookbooks
 
 # config for the web app and nginx in here
 privateIp=`hostname -I | cut -d" " -f2`
-cp -p env.json /home/vagrant/node.json
+cp -p env.runtime.json /home/vagrant/node.json
 sed -i "s/^{/{\\"private-ip\\": \\"${privateIp}\\",/"  /home/vagrant/node.json
 
 
@@ -96,7 +129,7 @@ cat << PYTHON > testwebapp.py
 import json
 import requests
 import re
-with open('/vagrant/env.json') as data_file:    
+with open('/vagrant/env.runtime.json') as data_file:    
   data = json.load(data_file)
 numberOfNodes=int(data["numberOfNodes"])
 numberOfAttempts=numberOfNodes * 10
@@ -113,7 +146,7 @@ for x in range(0,numberOfAttempts-1):
 	
   except:
     pass
-  if matches is not None and matches.groups > 1:
+  if matches is not None and matches.groups is not None and matches.groups > 1:
     print "seen node"+matches.group(1)
     seenHosts[matches.group(1)] = "OK"  
   if len(seenHosts) == numberOfNodes:
