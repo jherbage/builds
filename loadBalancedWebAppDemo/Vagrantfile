@@ -8,14 +8,19 @@ begin
   data = JSON.parse(file)
 rescue
   puts "no env.json provided so will use defaults"
-ensure
   data = {
 "numberOfNodes" => "2",
 "subnet" => "192.168.10",
 "listening_port" => "8080",
-"webapp_port" => "8002"
-}
-  file = File.write('env.json', data.to_json)
+"webapp_port" => "8002",
+"provisioning" => "chef"
+  }
+end
+
+
+unless ["chef", "puppet"].include?(data["provisioning"])
+  # default to chef
+  data["provisioning"] = "chef"
 end
   
 numberOfNodes=data["numberOfNodes"].to_i
@@ -44,6 +49,8 @@ end
 # write the data out again so its available for a runtime execution
 file = File.write('env.runtime.json', data.to_json)
 
+#Process.kill 9, Process.pid
+
 $HOSTFILE = <<EOF
 # Create python script
 cat << PYTHON > createhostfile.py
@@ -66,7 +73,7 @@ rm -f createhostfile.py
 exit $rc
 EOF
 
-$NODE_SCRIPT = <<EOF
+$NODE_CHEF_SCRIPT = <<EOF
 echo "Preparing node..."
 
 # ensure the time is up to date
@@ -75,7 +82,12 @@ apt-get -y install ntp
 service ntp stop
 ntpdate -s time.nist.gov
 service ntp start
-apt-get -y install build-essential ruby-dev git curl build-essential libxml2-dev libxslt-dev libssl-dev autoconf 
+
+apt-get -y install build-essential curl git
+
+# are we provisioning with chef or puppet??
+
+apt-get -y install ruby-dev libxml2-dev libxslt-dev libssl-dev autoconf 
 # install chef
 if [ ! -e /opt/chef/bin/chef-solo ] ; then
   curl -L https://www.opscode.com/chef/install.sh | bash
@@ -114,6 +126,46 @@ sed -i "s/^{/{\\"private-ip\\": \\"${privateIp}\\",/"  /home/vagrant/node.json
 #install web app 
 chef-solo --override-runlist "recipe[HelloWorldNodeJS]" -j /home/vagrant/node.json
 
+EOF
+
+$NODE_PUPPET_SCRIPT = <<EOF
+echo "Preparing node..."
+
+# ensure the time is up to date
+apt-get update
+apt-get -y install ntp
+service ntp stop
+ntpdate -s time.nist.gov
+service ntp start
+
+apt-get -y install build-essential curl git
+
+if [ ! -e puppetlabs-release-pc1-wheezy.deb ] ; then
+  wget https://apt.puppetlabs.com/puppetlabs-release-pc1-trusty.deb
+  dpkg -i puppetlabs-release-pc1-wheezy.deb
+  apt-get -y install puppet
+fi
+# check puppet installed
+puppet help | grep -v grep | grep "Puppet v"
+if [ "$?" != 0 ]; then
+  echo "failed to install Puppet"
+  exit 1
+fi  
+  
+cd /vagrant
+git clone https://github.com/jherbage/puppet-conf
+  
+cat << CONTENT > /etc/puppet/puppet.conf
+[main]
+logdir=/var/log/puppet
+vardir=/var/lib/puppet
+ssldir=/var/lib/puppet/ssl
+rundir=/var/run/puppet
+factpath=/vagrant/puppet-conf
+CONTENT
+
+#install web app 
+puppet apply /vagrant/puppet-conf/manifests/webapp.pp
 EOF
 
 # Installs my nginx recipe which includes a template to load balance across the nodes defined in node.json	
@@ -179,7 +231,15 @@ Vagrant.configure(2) do |config|
   config.vm.box = "puppetlabs/ubuntu-14.04-64-nocm"
 
   config.vm.provision "shell", inline: $HOSTFILE
-  config.vm.provision :shell, inline: $NODE_SCRIPT
+  case data["provisioning"] 
+  when "chef"
+    config.vm.provision :shell, inline: $NODE_CHEF_SCRIPT
+  when "puppet"
+    config.vm.provision :shell, inline: $NODE_PUPPET_SCRIPT
+  else
+    puts "Unknown provisioning value"
+	Process.kill 9, Process.pid
+  end
   # eth1
   (2..numberOfNodes).each do|n|
     config.vm.define "node"+n.to_s do |node|
