@@ -9,7 +9,12 @@ import boto3
 import time
 import os
 import nltk
+dynamodb = boto3.resource('dynamodb')
+dynamodb_client = boto3.client('dynamodb')
 
+
+
+	
 def convertDateToEpoch(datestr):
 	# eg date 2017-04-03T12:48:14Z
 	pattern = '%Y-%m-%dT%H:%M:%S'
@@ -27,47 +32,30 @@ def handler(event, context):
 	os.environ['PATH'] = MY_PATH+":./phantomjs-1.9.8-linux-x86_64/bin"
 	# The path for the NLTK data for TextBlob processing
 	nltk.data.path.append("./nltk_data")
-	
-	# read the required data from env.runtime.json
-	with open('env.json') as data_file:    
-	  data = json.load(data_file)
 
-	dynamodb = boto3.resource('dynamodb', aws_secret_access_key = data['aws_secret_access_key'], aws_access_key_id=data['aws_access_key_id'], region_name=data['aws_region'])
-	dynamodb_client = boto3.client('dynamodb')
-	lock_table = dynamodb.Table('locks')
-	run_history_table = dynamodb.Table('run_history')
-	function_ran_table = dynamodb.Table('function_ran')
 	starttime = time.strftime("%Y-%m-%d %H:%M:%S")
+	run_history_table = dynamodb.Table(event['run_history_tablename'])
 	
-	# On first execution just exit - dont know why but doesnt seem to work when deployed first)
-	if not function_ran_table.get_item(Key={'function': 'newshound'}).has_key('Item'):
-		print "first run: do nothing but put a run in"
-		function_ran_table.put_item(Item={ 'function': 'newshound' })
-		exit(0)
-
-	run_history_table.put_item(Item={ 'starttime': starttime })
-	lock = lock_table.get_item( Key={'lock': 'newshound'})
-	
-	if 'Item' in lock:
-		print "newshound already running since "+lock['Item']['StartTime']
-		run_history_table.update_item( Key={ 'starttime': starttime},
-			UpdateExpression="set endtime = :x",
-			ExpressionAttributeValues={ ':x': time.strftime("%Y-%m-%d %H:%M:%S") })
+	if not event or not 'newsApiKey' in event:
+		print "Missing newsApiKey in the event"
 		exit(1)
 	else:
-		lock_table.put_item(Item={ 'lock': 'newshound', 'StartTime': starttime })
+		print "Using news api key: "+event['newsApiKey']
+		
+	run_history_table.put_item(Item={ 'starttime': starttime })
+	
 			
 	# We need to exit whatever happens so wrap in try
 	try:
 
 			
-		news_items = dynamodb.Table('news_items')
-		news_urls =  dynamodb.Table('news_urls')
+		news_items = dynamodb.Table(event['news_items_tablename'])
+		news_urls =  dynamodb.Table(event['news_urls1_tablename'])
 
 		# dict of things
 		things={}
 		# query sources
-		apiKey=data['newsapi_key']
+		apiKey=event['newsApiKey']
 		obj=json.loads(urllib2.urlopen("https://newsapi.org/v1/sources").read())
 		sources=obj['sources']
 			
@@ -124,14 +112,15 @@ def handler(event, context):
 				# Now add the data to the backend
 				for thing, j in things.iteritems():
 					# incremebnt update or insert?
-					response = news_items.get_item( Key={'item': thing, 'url': article['url']})
+					response = news_items.get_item( Key={'newsitem': thing, 'url': article['url']})
 					if response.has_key('Item'):
-						news_items.update_item( Key={ 'item': thing , 'url': article['url']},
+						news_items.update_item( Key={ 'newsitem': thing , 'url': article['url']},
 							UpdateExpression="set tally = :x",
 							ExpressionAttributeValues={ ':x': int(response['Item']['tally']) +int(j) })
 					else:
-						try:
-							news_items.put_item( Item={ 'item': thing, 'url': article['url'], 'tally': int(j), 'publishedat': convertDateToEpoch(article['publishedAt']) })
+						try: 
+							publishedAt = convertDateToEpoch(article['publishedAt']) if article['publishedAt'] is not None else int(time.time())
+							news_items.put_item( Item={ 'newsitem': thing, 'url': article['url'], 'tally': int(j), 'publishedat': publishedAt })
 						except ValueError:
 							# skip as bad date
 							print "can't process "+article['url']+ " because date format unknown: "+article['publishedAt']
@@ -141,10 +130,6 @@ def handler(event, context):
 			driver.service.process.send_signal(signal.SIGTERM)
 	except Exception as e:
 		print "exception in newshound: "+str(e)
-	finally:
-		lock_table.delete_item( Key={'lock': 'newshound'})
-	run_history_table.update_item( Key={ 'starttime': starttime},
-			UpdateExpression="set endtime = :x",
-			ExpressionAttributeValues={ ':x': time.strftime("%Y-%m-%d %H:%M:%S") })
-			
-handler(None, None)
+
+		
+handler({"newsApiKey": "510eb9cfaf384d928641d146894d7821"},{})	
