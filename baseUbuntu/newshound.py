@@ -50,7 +50,7 @@ def handler(event, context):
 
 			
 		news_items = dynamodb.Table(event['news_items_tablename'])
-		news_urls =  dynamodb.Table(event['news_urls1_tablename'])
+		news_urls =  dynamodb.Table(event['news_url_tablename'])
 
 		# dict of things
 		things={}
